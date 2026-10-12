@@ -3,11 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Calcolatore Ricette</title>
+<title>Calcolatore ricette</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
 <style>
   :root {
     box-sizing: border-box;
@@ -59,9 +61,10 @@
     min-height: 48px; padding: 0 1.1rem; border-radius: 10px; font-weight: 600; font-size: 1rem;
     border: 1.5px solid var(--line); background: var(--surface); color: var(--ink); cursor: pointer;
   }
-  .btn:focus-visible, .chip:focus-visible, .seg button:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 55%, transparent); outline-offset: 2px; }
+  .btn:focus-visible, .chip:focus-visible, .seg button:focus-visible, .logbox:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 55%, transparent); outline-offset: 2px; }
   .btn-primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
   .btn-danger { color: var(--danger); }
+  .btn-quiet { border-style: dashed; color: var(--muted); font-weight: 500; font-size: 0.95rem; }
   .chip {
     min-height: 44px; min-width: 56px; padding: 0 0.9rem; border-radius: 999px; cursor: pointer;
     border: 1.5px solid var(--line); background: var(--surface-2); color: var(--ink);
@@ -79,6 +82,22 @@
   .row:last-child { border-bottom: 0; }
   .row .bar { position: absolute; inset: 0 auto 0 0; background: var(--bar); z-index: 0; transition: width 0.25s ease; }
   .row .content { position: relative; z-index: 1; }
+  .logbox { max-height: 18rem; overflow-y: auto; overscroll-behavior: contain; }
+  .logrow { padding: 0.8rem 1rem; border-bottom: 1px solid var(--line); display: block; }
+  .logrow:last-child { border-bottom: 0; }
+  .logdate { color: var(--muted); font-size: 0.85rem; }
+  .logdetail { color: var(--muted); font-size: 0.92rem; margin-top: 0.15rem; overflow-wrap: anywhere; }
+  @media (min-width: 640px) {
+    .logrow { display: grid; grid-template-columns: 8.5rem minmax(0, 1fr); gap: 0.75rem; padding: 0.8rem 1.25rem; }
+  }
+  .badge {
+    display: inline-block; font-size: 0.78rem; font-weight: 700; padding: 0.1rem 0.5rem; border-radius: 999px;
+    border: 1.5px solid var(--line); margin-right: 0.35rem; vertical-align: 1px;
+  }
+  .b-create { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .b-edit { background: var(--surface-2); color: var(--ink); }
+  .b-delete { color: var(--danger); border-color: var(--danger); }
+  .b-reset, .b-init, .b-sync { color: var(--muted); }
   .modal-back { position: fixed; inset: 0; background: rgba(5, 12, 9, 0.6); z-index: 50; display: none; }
   .modal-back.open { display: flex; align-items: flex-end; justify-content: center; }
   @media (min-width: 640px) { .modal-back.open { align-items: center; } }
@@ -91,7 +110,7 @@
   .toast {
     position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(1.25rem + env(safe-area-inset-bottom, 0px));
     background: var(--ink); color: var(--bg); padding: 0.7rem 1.1rem; border-radius: 10px; font-weight: 600;
-    z-index: 60; opacity: 0; pointer-events: none; transition: opacity 0.2s ease;
+    z-index: 60; opacity: 0; pointer-events: none; transition: opacity 0.2s ease; max-width: 92%; text-align: center;
   }
   .toast.show { opacity: 1; }
   .err { color: var(--danger); font-size: 0.95rem; font-weight: 600; }
@@ -123,13 +142,13 @@
         <div class="mb-1.5 font-semibold">Inserisci la quantità di</div>
         <div class="seg w-full" role="group" aria-label="Base di calcolo">
           <button type="button" id="basisTotal" class="flex-1" aria-pressed="true">Impasto totale</button>
-          <button type="button" id="basisMeat" class="flex-1" aria-pressed="false">Carne totale</button>
+          <button type="button" id="basisBase" class="flex-1" aria-pressed="false">Carne totale</button>
         </div>
       </div>
 
       <div class="mt-5 flex items-end justify-between gap-3">
         <label for="qty" id="qtyLabel" class="block font-semibold">Quantità</label>
-        <div class="seg" role="group" aria-label="Unità di misura">
+        <div id="unitWrap" class="seg" role="group" aria-label="Unità di misura">
           <button type="button" id="unitKg" aria-pressed="true">kg</button>
           <button type="button" id="unitG" aria-pressed="false">g</button>
         </div>
@@ -143,8 +162,36 @@
         <button id="addBtn" class="btn btn-primary col-span-2">Aggiungi ricetta</button>
         <button id="editBtn" class="btn">Modifica</button>
         <button id="delBtn" class="btn btn-danger">Elimina</button>
+        <button id="resetBtn" class="btn btn-quiet col-span-2">Ripristina ricette iniziali</button>
       </div>
-      <p id="builtinNote" class="mt-2 hidden text-sm" style="color:var(--muted)">Le ricette precaricate non si modificano né si eliminano.</p>
+
+      <!-- Sincronizzazione -->
+      <div class="mt-6 border-t pt-4" style="border-color:var(--line)">
+        <div class="flex items-center justify-between gap-3">
+          <h3 class="font-semibold">Sincronizzazione</h3>
+          <span id="syncStatus" class="badge" style="margin-right:0">Non attiva</span>
+        </div>
+        <p id="syncNote" class="mt-1 text-sm" style="color:var(--muted)"></p>
+
+        <div id="syncForm" class="mt-3">
+          <label for="syncCode" class="mb-1.5 block text-sm font-semibold">Codice condiviso</label>
+          <input id="syncCode" class="field num" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="almeno 8 caratteri (lettere, numeri, - _)">
+          <p id="syncErr" class="err mt-1.5 hidden" role="alert"></p>
+          <div class="mt-2 grid grid-cols-2 gap-2">
+            <button id="syncGen" type="button" class="btn">Genera codice</button>
+            <button id="syncConnect" type="button" class="btn btn-primary">Collega</button>
+          </div>
+        </div>
+
+        <div id="syncOn" class="mt-3 hidden">
+          <div class="text-sm font-semibold">Codice in uso</div>
+          <div id="syncCodeShow" class="num mt-1 break-all rounded-lg px-3 py-2" style="background:var(--surface-2)"></div>
+          <div class="mt-2 grid grid-cols-2 gap-2">
+            <button id="syncCopy" type="button" class="btn">Copia codice</button>
+            <button id="syncOff" type="button" class="btn btn-danger">Scollega</button>
+          </div>
+        </div>
+      </div>
     </section>
 
     <!-- Risultato -->
@@ -162,6 +209,14 @@
         </div>
         <div id="results" role="list"></div>
       </div>
+
+      <div class="card">
+        <div class="flex items-center justify-between gap-3 border-b px-4 py-3 sm:px-5" style="border-color:var(--line)">
+          <h2 class="text-lg font-semibold">Registro modifiche</h2>
+          <span id="logCount" class="num text-sm" style="color:var(--muted)"></span>
+        </div>
+        <div id="logBox" class="logbox" role="log" tabindex="0" aria-label="Registro di creazione, modifica ed eliminazione delle ricette, dal più vecchio al più recente"></div>
+      </div>
     </section>
   </div>
 </div>
@@ -175,23 +230,33 @@
     <input id="mName" class="field" type="text" maxlength="60" placeholder="Es. Salsa al tartufo">
 
     <fieldset class="mt-4">
-      <legend class="mb-1.5 font-semibold">Base di calcolo predefinita</legend>
-      <div class="flex flex-col gap-2 sm:flex-row">
-        <label class="card flex cursor-pointer items-center gap-3 px-3 py-3 sm:flex-1">
+      <legend class="mb-1.5 font-semibold">Come si calcola</legend>
+      <div class="flex flex-col gap-2">
+        <label class="card flex cursor-pointer items-center gap-3 px-3 py-3">
           <input type="radio" name="mMode" value="total" checked>
           <span><span class="block font-semibold">Peso totale</span><span class="block text-sm" style="color:var(--muted)">Inserisci i kg finali dell'impasto</span></span>
         </label>
-        <label class="card flex cursor-pointer items-center gap-3 px-3 py-3 sm:flex-1">
-          <input type="radio" name="mMode" value="meat">
-          <span><span class="block font-semibold">Kg di carne</span><span class="block text-sm" style="color:var(--muted)">Inserisci i kg di carne totale</span></span>
+        <label class="card flex cursor-pointer items-center gap-3 px-3 py-3">
+          <input type="radio" name="mMode" value="base">
+          <span><span class="block font-semibold">Ingrediente base</span><span class="block text-sm" style="color:var(--muted)">Parti dai kg di un ingrediente (es. carne, mascarpone); gli altri lo seguono</span></span>
+        </label>
+        <label class="card flex cursor-pointer items-center gap-3 px-3 py-3">
+          <input type="radio" name="mMode" value="portions">
+          <span><span class="block font-semibold">Preparazioni standard</span><span class="block text-sm" style="color:var(--muted)">Inserisci quante preparazioni fare; le quantità sono per una preparazione</span></span>
         </label>
       </div>
     </fieldset>
 
+    <div id="mBaseWrap" class="mt-4">
+      <label for="mBaseLabel" class="mb-1.5 block font-semibold">Nome dell'ingrediente base</label>
+      <input id="mBaseLabel" class="field" type="text" maxlength="30" placeholder="carne">
+      <p class="mt-1 text-sm" style="color:var(--muted)">Serve se spunti la casella «base» su uno o più ingredienti. Con la scelta «Ingrediente base» è obbligatoria; con «Peso totale» permette comunque di passare dall'una all'altra.</p>
+    </div>
+
     <div class="mt-5">
       <div class="flex items-baseline justify-between">
         <h3 class="font-semibold">Ingredienti della base</h3>
-        <span id="refHeader" class="text-sm" style="color:var(--muted)">Spunta gli ingredienti di carne</span>
+        <span id="refHeader" class="text-sm" style="color:var(--muted)">Spunta quelli di base</span>
       </div>
       <p class="mb-2 text-sm" style="color:var(--muted)">Quantità in grammi, riferite alla base della ricetta.</p>
       <div id="mRows" class="space-y-2"></div>
@@ -213,136 +278,190 @@
 (function () {
   "use strict";
 
-  // ---------- Ricette precaricate ----------
-  var DEFAULTS = [
-    {
-      id: "crema-parmigiano", name: "Vecchia Modena", mode: "total", builtin: true,
-      ingredients: [
-        { name: "Parmigiano", grams: 275 },
-        { name: "Acqua tiepida", grams: 250 },
-        { name: "Acqua fredda", grams: 25 },
-        { name: "Amido", grams: 15 }
-      ]
-    },
-    {
-      id: "base-pistacchio", name: "Piovono pistacchi", mode: "total", builtin: true,
-      ingredients: [
-        { name: "Granella di pistacchio", grams: 2000 },
-        { name: "Olio di semi", grams: 2200 },
-        { name: "Formaggio", grams: 1000 }
-      ]
-    },
-    {
-      id: "crema-pecorino-latte", name: "Cacio e pepe", mode: "total", builtin: true,
-      ingredients: [
-        { name: "Latte", grams: 300 },
-        { name: "Pecorino", grams: 200 },
-        { name: "Sbiancato", grams: 100 },
-        { name: "Pepe", grams: 2 },
-        { name: "Acqua", grams: 150 }
-      ]
-    },
-    {
-      id: "impasto-carne", name: "Polpette", mode: "meat", builtin: true,
-      ingredients: [
-        { name: "Macinato (50% manzo / 50% maiale)", grams: 1000, meat: true },
-        { name: "Misto d'uovo", grams: 180 },
-        { name: "Formaggio grattugiato", grams: 100 },
-        { name: "Latte", grams: 50 },
-        { name: "Sale fino", grams: 15 },
-        { name: "Pepe", grams: 3 },
-        { name: "Olio di oliva", grams: 50 },
-        { name: "Pangrattato", grams: 100 }
-      ]
-    },
-    {
-      id: "ragu-bolognese", name: "Ragù alla bolognese", mode: "total", builtin: true,
-      ingredients: [
-        { name: "Carne macinata di manzo", grams: 600, meat: true },
-        { name: "Carne macinata di maiale", grams: 250, meat: true },
-        { name: "Pancetta dolce", grams: 150, meat: true },
-        { name: "Passata di pomodoro corposa", grams: 700 },
-        { name: "Cipolla bianca piccola", grams: 70 },
-        { name: "Sedano", grams: 70 },
-        { name: "Carota", grams: 70 },
-        { name: "Olio extravergine", grams: 40 },
-        { name: "Vino rosso corposo", grams: 100 },
-        { name: "Sale", grams: 20 }
-      ]
-    },
-    {
-      id: "sugo-pomodoro", name: "Sugo di pomodoro", mode: "total", builtin: true,
-      ingredients: [
-        { name: "Mutti", grams: 1000 },
-        { name: "Cipolla", grams: 22.7 },
-        { name: "Olio", grams: 44 },
-        { name: "Aglio", grams: 1.3 },
-        { name: "Sale", grams: 3.6 },
-        { name: "Basilico", grams: 6.7 }
-      ]
-    }
+  // =====================================================================
+  //  SINCRONIZZAZIONE FIREBASE
+  //  Incolla qui sotto i valori del tuo progetto Firebase (firebaseConfig).
+  //  Finché apiKey e databaseURL restano vuoti, l'app funziona solo su
+  //  questo dispositivo.
+  // =====================================================================
+  var FIREBASE_CONFIG = {
+    apiKey: "",
+    authDomain: "",
+    databaseURL: "",
+    projectId: "",
+    storageBucket: "",
+    messagingSenderId: "",
+    appId: ""
+  };
+
+  // ---------- Ricette iniziali (tutte modificabili ed eliminabili) ----------
+  // mode: "total" = si inserisce il peso totale; "base" = si parte dai kg dell'ingrediente base;
+  //       "portions" = numero di preparazioni standard.
+  // Nelle ricette "total" o "base" gli ingredienti con base:true permettono di scegliere
+  // se inserire l'impasto totale oppure la quantità dell'ingrediente base (baseLabel).
+  var SEED = [
+    { id: "polpette", name: "Polpette", mode: "base", baseLabel: "carne", ingredients: [
+      { name: "Macinato di manzo", grams: 500, base: true },
+      { name: "Macinato di maiale", grams: 500, base: true },
+      { name: "Misto d'uovo", grams: 180 },
+      { name: "Sbiancato", grams: 100 },
+      { name: "Sale fino", grams: 15 },
+      { name: "Olio di oliva", grams: 50 },
+      { name: "Pangrattato", grams: 150 }
+    ] },
+    { id: "ragu-bolognese", name: "Ragù alla bolognese", mode: "total", baseLabel: "carne", ingredients: [
+      { name: "Macinato di manzo", grams: 600, base: true },
+      { name: "Macinato di maiale", grams: 250, base: true },
+      { name: "Pancetta dolce", grams: 150, base: true },
+      { name: "Passata di pomodoro", grams: 700 },
+      { name: "Soffritto misto", grams: 200 },
+      { name: "Olio extravergine", grams: 30 },
+      { name: "Vino rosso", grams: 100 },
+      { name: "Sale", grams: 20 }
+    ] },
+    { id: "piovono-pistacchi", name: "Piovono pistacchi", mode: "total", ingredients: [
+      { name: "Granella di pistacchi", grams: 385 },
+      { name: "Olio di semi", grams: 423 },
+      { name: "Sbiancato", grams: 192 }
+    ] },
+    { id: "cacio-e-pepe", name: "Cacio e pepe", mode: "total", ingredients: [
+      { name: "Latte", grams: 300 },
+      { name: "Pecorino", grams: 200 },
+      { name: "Sbiancato", grams: 100 },
+      { name: "Pepe", grams: 2 },
+      { name: "Acqua", grams: 150 }
+    ] },
+    { id: "vecchia-modena", name: "Vecchia Modena", mode: "total", ingredients: [
+      { name: "Latte", grams: 300 },
+      { name: "Sbiancato", grams: 400 },
+      { name: "Acqua", grams: 150 }
+    ] },
+    { id: "sugo-pomodoro", name: "Sugo di pomodoro", mode: "total", ingredients: [
+      { name: "Mutti", grams: 1000 },
+      { name: "Cipolla", grams: 22.7 },
+      { name: "Olio oliva", grams: 44 },
+      { name: "Aglio", grams: 1.3 },
+      { name: "Sale", grams: 3.6 },
+      { name: "Basilico", grams: 6.7 }
+    ] },
+    { id: "crema-mascarpone", name: "Crema di mascarpone", mode: "total", baseLabel: "mascarpone", ingredients: [
+      { name: "Mascarpone", grams: 705.9, base: true },
+      { name: "Tuorlo", grams: 105.9 },
+      { name: "Zucchero", grams: 188.2 }
+    ] },
+    { id: "tf-ragu-besciamella", name: "TF Ragù e besciamella", mode: "portions", ingredients: [
+      { name: "Pasta (peso a crudo)", grams: 1200 },
+      { name: "Besciamella", grams: 1200 },
+      { name: "Mozzarella", grams: 650 },
+      { name: "Ragù", grams: 1200 },
+      { name: "Sbiancato", grams: 250 }
+    ] },
+    { id: "tf-nerana", name: "TF Nerana", mode: "portions", ingredients: [
+      { name: "Pasta (peso a crudo)", grams: 1200 },
+      { name: "Besciamella", grams: 1200 },
+      { name: "Mozzarella", grams: 650 },
+      { name: "Zucchine (peso a crudo)", grams: 1200 },
+      { name: "Sbiancato", grams: 250 }
+    ] },
+    { id: "tf-parmigiana", name: "TF Parmigiana", mode: "portions", ingredients: [
+      { name: "Pasta (peso a crudo)", grams: 1200 },
+      { name: "Besciamella", grams: 1200 },
+      { name: "Mozzarella", grams: 650 },
+      { name: "Melanzana (peso a crudo)", grams: 1200 },
+      { name: "Sugo pomodoro", grams: 660 }
+    ] },
+    { id: "tf-porca-pancetta", name: "TF Porca pancetta", mode: "portions", ingredients: [
+      { name: "Pasta (peso a crudo)", grams: 1200 },
+      { name: "Besciamella", grams: 1200 },
+      { name: "Mozzarella", grams: 650 },
+      { name: "Ragù di pancetta", grams: 1200 },
+      { name: "Sbiancato", grams: 250 }
+    ] }
   ];
+  SEED.forEach(function (r, i) { r.pos = i + 1; });
+
+  var MODE_LABEL = { total: "Peso totale", base: "Ingrediente base", portions: "Preparazioni standard" };
+  var ACTION_LABEL = { init: "Avvio", create: "Creata", edit: "Modificata", "delete": "Eliminata", reset: "Ripristino", sync: "Sincronizzazione" };
 
   // ---------- Stato e storage ----------
-  var STORE_KEY = "calcolatore-ricette:custom:v1";
-  var PREF_KEY = "calcolatore-ricette:prefs:v1";
-  var custom = [];
-  var state = { id: DEFAULTS[0].id, qty: "10", unit: "kg", basis: "total" };
+  var KEYS = {
+    recipes: "calcolatore-ricette:recipes:v2",
+    log: "calcolatore-ricette:log:v2",
+    prefs: "calcolatore-ricette:prefs:v2",
+    sync: "calcolatore-ricette:sync:v1"
+  };
+  var recipes = [];
+  var logs = [];
+  var state = { id: SEED[0].id, qty: "10", unit: "kg", basis: "total" };
   var editingId = null;
+  var editingOld = null;
   var draft = [];
-  var draftRef = 0;
+  var sync = { on: false, code: "", ref: null, infoRef: null, online: false, error: false, firstRecipes: false, firstLog: false };
 
-  function loadCustom() {
-    try {
-      var raw = localStorage.getItem(STORE_KEY);
-      var arr = raw ? JSON.parse(raw) : [];
-      if (Array.isArray(arr)) custom = arr.filter(validRecipe).map(migrate);
-    } catch (e) { custom = []; }
+  function clone(x) { return JSON.parse(JSON.stringify(x)); }
+  function toArr(x) {
+    if (!x) return [];
+    if (Array.isArray(x)) return x.filter(function (v) { return v !== null && v !== undefined; });
+    return Object.keys(x).map(function (k) { return x[k]; });
   }
-  function saveCustom() {
-    try { localStorage.setItem(STORE_KEY, JSON.stringify(custom)); } catch (e) { /* sessione soltanto */ }
-  }
-  function loadPrefs() {
-    try {
-      var raw = localStorage.getItem(PREF_KEY);
-      if (!raw) return;
-      var p = JSON.parse(raw);
-      if (p && typeof p === "object") {
-        if (p.unit === "g" || p.unit === "kg") state.unit = p.unit;
-        if (typeof p.qty === "string") state.qty = p.qty;
-        if (typeof p.id === "string") state.id = p.id;
-        if (p.basis === "meat" || p.basis === "total") state.basis = p.basis;
-      }
-    } catch (e) {}
-  }
-  function savePrefs() {
-    try { localStorage.setItem(PREF_KEY, JSON.stringify(state)); } catch (e) {}
-  }
+  function readJSON(k) { try { var raw = localStorage.getItem(k); return raw ? JSON.parse(raw) : null; } catch (e) { return null; } }
+  function writeJSON(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* solo sessione */ } }
+  function saveRecipes() { writeJSON(KEYS.recipes, recipes); }
+  function savePrefs() { writeJSON(KEYS.prefs, state); }
+
   function validRecipe(r) {
     return r && typeof r.id === "string" && typeof r.name === "string" &&
-      (r.mode === "total" || r.mode === "meat") && Array.isArray(r.ingredients) && r.ingredients.length > 0 &&
+      (r.mode === "total" || r.mode === "base" || r.mode === "portions") &&
+      Array.isArray(r.ingredients) && r.ingredients.length > 0 &&
       r.ingredients.every(function (i) { return i && typeof i.name === "string" && typeof i.grams === "number" && i.grams > 0; });
   }
+  function validLog(l) { return l && typeof l.t === "string" && typeof l.a === "string" && Array.isArray(l.d); }
 
-  function allRecipes() { return DEFAULTS.concat(custom); }
-  function current() {
-    var list = allRecipes();
-    for (var i = 0; i < list.length; i++) if (list[i].id === state.id) return list[i];
-    state.id = list[0].id;
-    return list[0];
-  }
-  function totalOf(r) { return r.ingredients.reduce(function (s, i) { return s + i.grams; }, 0); }
-  function meatOf(r) { return r.ingredients.reduce(function (s, i) { return s + (i.meat ? i.grams : 0); }, 0); }
-  function hasMeat(r) { return r.ingredients.some(function (i) { return i.meat; }); }
-  function isMeatBasis(r) { return hasMeat(r) && state.basis === "meat"; }
-  function recipeDefault(r) { return hasMeat(r) && r.mode === "meat" ? "meat" : "total"; }
-  function baseRef(r) { return isMeatBasis(r) ? meatOf(r) : totalOf(r); }
+  // Adatta ricette salvate con il vecchio formato ("meat") al nuovo ("base")
   function migrate(r) {
-    if (r.mode === "meat" && !hasMeat(r)) {
-      var k = r.refIndex || 0;
-      if (r.ingredients[k]) r.ingredients[k].meat = true;
-    }
+    if (!r || typeof r !== "object") return r;
+    if (r.mode === "meat") r.mode = "base";
+    var any = false;
+    r.ingredients = toArr(r.ingredients).map(function (i) {
+      if (i && typeof i === "object") {
+        if (i.meat) i.base = true;
+        delete i.meat;
+        if (i.base) any = true; else delete i.base;
+      }
+      return i;
+    });
+    if (any && !r.baseLabel) r.baseLabel = "carne";
+    if (!any && r.mode === "base") r.mode = "total";
+    if (!any) delete r.baseLabel;
     return r;
+  }
+  function ensurePos(list) {
+    var max = 0;
+    list.forEach(function (r) { if (typeof r.pos === "number" && r.pos > max) max = r.pos; });
+    list.forEach(function (r) { if (typeof r.pos !== "number") r.pos = ++max; });
+    list.sort(function (a, b) { return a.pos - b.pos; });
+    return list;
+  }
+  function nextPos() {
+    var max = 0;
+    recipes.forEach(function (r) { if (r.pos > max) max = r.pos; });
+    return max + 1;
+  }
+
+  // ---------- Calcoli ----------
+  function totalOf(r) { return r.ingredients.reduce(function (s, i) { return s + i.grams; }, 0); }
+  function isPortions(r) { return r.mode === "portions"; }
+  function hasBase(r) { return !isPortions(r) && r.ingredients.some(function (i) { return i.base; }); }
+  function baseOf(r) { return r.ingredients.reduce(function (s, i) { return s + (i.base ? i.grams : 0); }, 0); }
+  function baseName(r) { return r.baseLabel || "carne"; }
+  function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+  function isBaseBasis(r) { return hasBase(r) && state.basis === "base"; }
+  function recipeDefault(r) { return r.mode === "base" && hasBase(r) ? "base" : "total"; }
+  function baseRef(r) { return isBaseBasis(r) ? baseOf(r) : totalOf(r); }
+  function current() {
+    for (var i = 0; i < recipes.length; i++) if (recipes[i].id === state.id) return recipes[i];
+    state.id = recipes[0].id;
+    return recipes[0];
   }
 
   // ---------- Utilità ----------
@@ -362,91 +481,200 @@
     return { main: nf(Math.round(g * 10) / 10, 1) + " g", sub: "" };
   }
   function fmtPlain(g) { var f = fmt(g); return f.sub ? f.main + " (" + f.sub + ")" : f.main; }
+  function fmtDate(iso) {
+    var d = new Date(iso); if (isNaN(d.getTime())) return "";
+    return d.toLocaleDateString("it-IT", { day: "2-digit", month: "2-digit", year: "numeric" }) + " " +
+      d.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" });
+  }
   function toast(msg) {
     var t = $("toast"); t.textContent = msg; t.classList.add("show");
-    clearTimeout(toast._t); toast._t = setTimeout(function () { t.classList.remove("show"); }, 1800);
+    clearTimeout(toast._t); toast._t = setTimeout(function () { t.classList.remove("show"); }, 2400);
+  }
+
+  function calc(r) {
+    var q = parseNum($("qty").value);
+    if (!isFinite(q) || q <= 0) return null;
+    var por = isPortions(r);
+    var target = por ? q : (state.unit === "kg" ? q * 1000 : q);
+    var factor = por ? q : target / baseRef(r);
+    return { q: q, target: target, factor: factor, total: totalOf(r) * factor, por: por };
+  }
+
+  // ---------- Sincronizzazione: scritture remote ----------
+  function syncAvailable() {
+    return !!(FIREBASE_CONFIG.apiKey && FIREBASE_CONFIG.databaseURL && typeof firebase !== "undefined");
+  }
+  function onSyncError(err) {
+    sync.error = true; renderSync();
+    toast("Sincronizzazione non riuscita: controlla codice e regole del database");
+    if (window.console) console.error(err);
+  }
+  function rSet(recipe) {
+    if (!sync.on) return;
+    try { sync.ref.child("recipes/" + recipe.id).set(clone(recipe)).catch(onSyncError); } catch (e) { onSyncError(e); }
+  }
+  function rRemove(id) {
+    if (!sync.on) return;
+    try { sync.ref.child("recipes/" + id).remove().catch(onSyncError); } catch (e) { onSyncError(e); }
+  }
+  function rSetAll(list) {
+    if (!sync.on) return;
+    var map = {};
+    list.forEach(function (r) { map[r.id] = clone(r); });
+    try { sync.ref.child("recipes").set(map).catch(onSyncError); } catch (e) { onSyncError(e); }
+  }
+
+  // ---------- Registro modifiche ----------
+  function addLog(action, name, details) {
+    var entry = { t: new Date().toISOString(), a: action, n: name || "", d: details || [] };
+    if (sync.on) {
+      try { sync.ref.child("log").push(clone(entry)).catch(onSyncError); } catch (e) { onSyncError(e); }
+      return;
+    }
+    logs.push(entry);
+    if (logs.length > 1000) logs = logs.slice(logs.length - 1000);
+    writeJSON(KEYS.log, logs);
+    renderLog();
+  }
+  function renderLog() {
+    var box = $("logBox");
+    box.innerHTML = logs.map(function (l) {
+      return '<div class="logrow">' +
+        '<div class="num logdate">' + esc(fmtDate(l.t)) + "</div>" +
+        '<div class="min-w-0"><span class="badge b-' + esc(l.a) + '">' + esc(ACTION_LABEL[l.a] || l.a) + "</span>" +
+        (l.n ? "<strong>" + esc(l.n) + "</strong>" : "") +
+        l.d.map(function (x) { return '<div class="logdetail">' + esc(x) + "</div>"; }).join("") +
+        "</div></div>";
+    }).join("");
+    $("logCount").textContent = logs.length + (logs.length === 1 ? " voce" : " voci");
+    box.scrollTop = box.scrollHeight;
+  }
+
+  function describeIngredient(i) { return i.name + " " + fmtPlain(i.grams); }
+  function diffRecipe(oldR, newR, rows) {
+    var out = [];
+    if (oldR.name !== newR.name) out.push("Nome: «" + oldR.name + "» → «" + newR.name + "»");
+    if (oldR.mode !== newR.mode) out.push("Calcolo: " + MODE_LABEL[oldR.mode] + " → " + MODE_LABEL[newR.mode]);
+    if (newR.mode !== "portions" && (oldR.baseLabel || "") !== (newR.baseLabel || "") && (oldR.baseLabel || newR.baseLabel)) {
+      out.push("Nome ingrediente base: «" + (oldR.baseLabel || "—") + "» → «" + (newR.baseLabel || "—") + "»");
+    }
+    var seen = {};
+    rows.forEach(function (row) {
+      var o = row.orig >= 0 ? oldR.ingredients[row.orig] : null;
+      if (o) {
+        seen[row.orig] = true;
+        if (o.name !== row.name) out.push("Ingrediente rinominato: «" + o.name + "» → «" + row.name + "»");
+        if (o.grams !== row.grams) out.push(row.name + ": " + fmtPlain(o.grams) + " → " + fmtPlain(row.grams));
+        if (newR.mode !== "portions" && !!o.base !== !!row.base) out.push(row.name + (row.base ? ": segnato come base" : ": non più segnato come base"));
+      } else {
+        out.push("Aggiunto: " + describeIngredient(row));
+      }
+    });
+    oldR.ingredients.forEach(function (o, idx) { if (!seen[idx]) out.push("Rimosso: " + describeIngredient(o)); });
+    return out;
   }
 
   // ---------- Render ----------
   function renderSelect() {
     var sel = $("recipeSelect");
-    var html = '<optgroup label="Precaricate">' + DEFAULTS.map(opt).join("") + "</optgroup>";
-    if (custom.length) html += '<optgroup label="Le mie ricette">' + custom.map(opt).join("") + "</optgroup>";
-    sel.innerHTML = html;
-    sel.value = state.id;
+    var a = recipes.filter(function (r) { return !isPortions(r); });
+    var b = recipes.filter(isPortions);
     function opt(r) { return '<option value="' + esc(r.id) + '">' + esc(r.name) + "</option>"; }
+    var html = "";
+    if (a.length) html += '<optgroup label="Ricette">' + a.map(opt).join("") + "</optgroup>";
+    if (b.length) html += '<optgroup label="Preparazioni standard">' + b.map(opt).join("") + "</optgroup>";
+    sel.innerHTML = html;
+    sel.value = current().id;
   }
 
-  function renderChips() {
-    var vals = state.unit === "kg" ? [1, 5, 10, 20, 35, 50] : [250, 500, 1000, 2000, 5000];
-    var cur = parseNum(state.qty);
+  function renderChips(por) {
+    var vals = por ? [1, 2, 3, 4, 5, 10] : (state.unit === "kg" ? [1, 5, 10, 20, 35, 50] : [250, 500, 1000, 2000, 5000]);
+    var cur = parseNum($("qty").value);
     $("chips").innerHTML = vals.map(function (v) {
-      return '<button type="button" class="chip" data-v="' + v + '" aria-pressed="' + (cur === v) + '">' + nf(v, 0) + " " + state.unit + "</button>";
+      return '<button type="button" class="chip" data-v="' + v + '" aria-pressed="' + (cur === v) + '">' + nf(v, 0) + (por ? "" : " " + state.unit) + "</button>";
     }).join("");
   }
 
   function render() {
     var r = current();
-    var isMeat = isMeatBasis(r);
-    $("basisWrap").classList.toggle("hidden", !hasMeat(r));
-    $("basisTotal").setAttribute("aria-pressed", !isMeat);
-    $("basisMeat").setAttribute("aria-pressed", isMeat);
+    var por = isPortions(r);
+    var isBase = isBaseBasis(r);
+    var bn = baseName(r);
 
-    $("ruleNote").textContent = "Base della ricetta: " + fmtPlain(totalOf(r)) + " totali" + (hasMeat(r) ? ", di cui " + fmtPlain(meatOf(r)) + " di carne" : "") + ".";
-    $("qtyLabel").textContent = isMeat ? "Carne totale desiderata" : "Impasto totale desiderato";
-    $("qtyHint").textContent = isMeat
-      ? "Gli altri ingredienti seguono la carne inserita."
-      : "Il totale di tutti gli ingredienti sarà questo peso.";
+    $("basisWrap").classList.toggle("hidden", !hasBase(r));
+    $("basisBase").textContent = cap(bn) + (bn.toLowerCase() === "carne" ? " totale" : "");
+    $("basisTotal").setAttribute("aria-pressed", !isBase);
+    $("basisBase").setAttribute("aria-pressed", isBase);
+    $("unitWrap").classList.toggle("hidden", por);
     $("unitKg").setAttribute("aria-pressed", state.unit === "kg");
     $("unitG").setAttribute("aria-pressed", state.unit === "g");
-    $("builtinNote").classList.toggle("hidden", !r.builtin);
-    $("editBtn").disabled = !!r.builtin; $("delBtn").disabled = !!r.builtin;
-    $("editBtn").style.opacity = r.builtin ? 0.45 : 1; $("delBtn").style.opacity = r.builtin ? 0.45 : 1;
+
+    if (por) {
+      $("ruleNote").textContent = "Preparazione standard: " + fmtPlain(totalOf(r)) + " totali. Il numero inserito è quante preparazioni fare.";
+      $("qtyLabel").textContent = "Numero di preparazioni";
+      $("qtyHint").textContent = "Gli ingredienti sono moltiplicati per il numero di preparazioni.";
+    } else {
+      $("ruleNote").textContent = "Base della ricetta: " + fmtPlain(totalOf(r)) + " totali" + (hasBase(r) ? ", di cui " + fmtPlain(baseOf(r)) + " di " + bn : "") + ".";
+      $("qtyLabel").textContent = isBase ? cap(bn) + " da usare" : "Impasto totale desiderato";
+      $("qtyHint").textContent = isBase ? "Gli altri ingredienti si adattano alla quantità inserita." : "Il totale di tutti gli ingredienti sarà questo peso.";
+    }
     $("listTitle").textContent = r.name;
-    renderChips();
+    renderChips(por);
 
-    var q = parseNum($("qty").value);
-    var target = state.unit === "kg" ? q * 1000 : q;
+    var c = calc(r);
     var box = $("results");
-
-    if (!isFinite(target) || target <= 0) {
-      $("scaleLabel").textContent = isMeat ? "Impasto totale" : "Peso totale";
+    if (!c) {
+      $("scaleLabel").textContent = por ? "Preparazioni standard" : (isBase ? "Impasto totale" : "Peso totale");
       $("scaleMain").textContent = "–";
       $("scaleSub").textContent = "";
       box.innerHTML = '<p class="px-4 py-6 sm:px-5" style="color:var(--muted)">Inserisci una quantità maggiore di zero per vedere gli ingredienti.</p>';
       return;
     }
 
-    var factor = target / baseRef(r);
-    var scaled = r.ingredients.map(function (i) { return { name: i.name, g: i.grams * factor }; });
-    var total = scaled.reduce(function (s, i) { return s + i.g; }, 0);
-
-    var tf = fmt(total);
-    if (isMeat) {
-      $("scaleLabel").textContent = "Impasto totale con " + fmtPlain(target) + " di carne";
+    var scaled = r.ingredients.map(function (i) { return { name: i.name, g: i.grams * c.factor, base: !!i.base }; });
+    var tf = fmt(c.total);
+    if (por) {
+      $("scaleLabel").textContent = "Preparazioni standard";
+      $("scaleMain").textContent = nf(c.q, 2) + (c.q === 1 ? " preparazione" : " preparazioni");
+      $("scaleSub").textContent = "peso totale " + fmtPlain(c.total);
     } else {
-      $("scaleLabel").textContent = "Peso totale";
+      $("scaleLabel").textContent = isBase ? "Impasto totale con " + fmtPlain(c.target) + " di " + bn : "Peso totale";
+      $("scaleMain").textContent = tf.main;
+      $("scaleSub").textContent = (tf.sub ? tf.sub + " · " : "") +
+        (hasBase(r) && !isBase ? bn + " " + fmtPlain(baseOf(r) * c.factor) + " · " : "") +
+        "moltiplicatore ×" + nf(c.factor, 3);
     }
-    $("scaleMain").textContent = tf.main;
-    $("scaleSub").textContent = (tf.sub ? tf.sub + " · " : "") + (hasMeat(r) && !isMeat ? "carne " + fmtPlain(meatOf(r) * factor) + " · " : "") + "moltiplicatore ×" + nf(factor, 3);
 
-    box.innerHTML = scaled.map(function (i, idx) {
+    box.innerHTML = scaled.map(function (i) {
       var f = fmt(i.g);
-      var pct = total > 0 ? (i.g / total) * 100 : 0;
-      var isRef = !!r.ingredients[idx].meat;
+      var pct = c.total > 0 ? (i.g / c.total) * 100 : 0;
       return '<div class="row" role="listitem">' +
         '<div class="bar" style="width:' + pct.toFixed(1) + '%"></div>' +
         '<div class="content flex items-center justify-between gap-3 px-4 py-3.5 sm:px-5">' +
           '<div class="min-w-0"><div class="text-lg font-semibold leading-snug">' + esc(i.name) + "</div>" +
-          '<div class="num text-sm" style="color:var(--muted)">' + nf(pct, 1) + "% dell'impasto" + (isRef ? " · carne" : "") + "</div></div>" +
+          '<div class="num text-sm" style="color:var(--muted)">' + nf(pct, 1) + "% del totale" + (i.base && !por ? " · " + esc(bn) : "") + "</div></div>" +
           '<div class="shrink-0 text-right"><div class="num text-2xl font-semibold">' + esc(f.main) + "</div>" +
           (f.sub ? '<div class="num text-sm" style="color:var(--muted)">' + esc(f.sub) + "</div>" : "") + "</div>" +
         "</div></div>";
     }).join("");
   }
 
+  // Seleziona una ricetta e imposta valori coerenti con il suo tipo
+  function selectRecipe(id, prevPortions) {
+    if (typeof prevPortions !== "boolean") prevPortions = isPortions(current());
+    state.id = id;
+    var r = current();
+    state.basis = recipeDefault(r);
+    if (prevPortions !== isPortions(r)) {
+      state.qty = isPortions(r) ? "1" : "10";
+      state.unit = "kg";
+      $("qty").value = state.qty;
+    }
+    savePrefs();
+  }
+
   // ---------- Eventi principali ----------
-  $("recipeSelect").addEventListener("change", function (e) { state.id = e.target.value; state.basis = recipeDefault(current()); savePrefs(); render(); });
+  $("recipeSelect").addEventListener("change", function (e) { selectRecipe(e.target.value); render(); });
   $("qty").addEventListener("input", function (e) { state.qty = e.target.value; savePrefs(); render(); });
   $("chips").addEventListener("click", function (e) {
     var b = e.target.closest("button[data-v]"); if (!b) return;
@@ -467,28 +695,31 @@
 
   function setBasis(b) {
     var r = current();
-    if (!hasMeat(r) || b === (isMeatBasis(r) ? "meat" : "total")) return;
+    if (!hasBase(r) || b === (isBaseBasis(r) ? "base" : "total")) return;
     var q = parseNum($("qty").value);
     if (isFinite(q)) {
-      var ratio = b === "meat" ? meatOf(r) / totalOf(r) : totalOf(r) / meatOf(r);
+      var ratio = b === "base" ? baseOf(r) / totalOf(r) : totalOf(r) / baseOf(r);
       $("qty").value = String(Math.round(q * ratio * 1000) / 1000).replace(".", ",");
       state.qty = $("qty").value;
     }
     state.basis = b; savePrefs(); render();
   }
   $("basisTotal").addEventListener("click", function () { setBasis("total"); });
-  $("basisMeat").addEventListener("click", function () { setBasis("meat"); });
+  $("basisBase").addEventListener("click", function () { setBasis("base"); });
 
   $("copyBtn").addEventListener("click", function () {
     var r = current();
-    var q = parseNum($("qty").value);
-    var target = state.unit === "kg" ? q * 1000 : q;
-    if (!isFinite(target) || target <= 0) { toast("Inserisci prima una quantità"); return; }
-    var factor = target / baseRef(r);
-    var lines = [r.name + (isMeatBasis(r) ? " – carne: " : " – totale: ") + fmtPlain(target)];
-    r.ingredients.forEach(function (i) { lines.push("- " + i.name + ": " + fmtPlain(i.grams * factor)); });
-    var text = lines.join("\n");
-    function done() { toast("Lista copiata"); }
+    var c = calc(r);
+    if (!c) { toast("Inserisci prima una quantità"); return; }
+    var head = c.por
+      ? r.name + " – " + nf(c.q, 2) + (c.q === 1 ? " preparazione" : " preparazioni")
+      : r.name + (isBaseBasis(r) ? " – " + baseName(r) + ": " : " – totale: ") + fmtPlain(c.target);
+    var lines = [head];
+    r.ingredients.forEach(function (i) { lines.push("- " + i.name + ": " + fmtPlain(i.grams * c.factor)); });
+    copyText(lines.join("\n"), "Lista copiata");
+  });
+  function copyText(text, okMsg) {
+    function done() { toast(okMsg); }
     function fallback() {
       try {
         var ta = document.createElement("textarea"); ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
@@ -497,7 +728,7 @@
     }
     if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, fallback);
     else fallback();
-  });
+  }
 
   // ---------- Tema ----------
   $("themeBtn").addEventListener("click", function () {
@@ -508,30 +739,36 @@
   });
 
   // ---------- Modale ----------
+  function modalMode() {
+    var c = document.querySelector('input[name="mMode"]:checked'); return c ? c.value : "total";
+  }
   function openModal(recipe) {
     editingId = recipe ? recipe.id : null;
+    editingOld = recipe ? clone(recipe) : null;
     $("modalTitle").textContent = recipe ? "Modifica ricetta" : "Nuova ricetta";
     $("mName").value = recipe ? recipe.name : "";
+    $("mBaseLabel").value = recipe && recipe.baseLabel ? recipe.baseLabel : "";
     var mode = recipe ? recipe.mode : "total";
     document.querySelectorAll('input[name="mMode"]').forEach(function (r) { r.checked = r.value === mode; });
     draft = recipe
-      ? recipe.ingredients.map(function (i) { return { name: i.name, grams: String(i.grams).replace(".", ","), meat: !!i.meat }; })
-      : [{ name: "", grams: "" }, { name: "", grams: "" }];
-    
+      ? recipe.ingredients.map(function (i, idx) {
+          return { name: i.name, grams: String(i.grams).replace(".", ","), base: !!i.base, orig: idx };
+        })
+      : [{ name: "", grams: "", base: false, orig: -1 }, { name: "", grams: "", base: false, orig: -1 }];
     $("mError").classList.add("hidden");
     renderRows();
     $("modalBack").classList.add("open");
     setTimeout(function () { $("mName").focus(); }, 50);
   }
   function closeModal() { $("modalBack").classList.remove("open"); }
-  function modalMode() {
-    var c = document.querySelector('input[name="mMode"]:checked'); return c ? c.value : "total";
-  }
 
   function renderRows() {
+    var showBase = modalMode() !== "portions";
+    $("refHeader").classList.toggle("hidden", !showBase);
+    $("mBaseWrap").classList.toggle("hidden", !showBase);
     $("mRows").innerHTML = draft.map(function (d, i) {
       return '<div class="flex items-center gap-2" data-row="' + i + '">' +
-        '<label class="flex shrink-0 flex-col items-center text-xs" style="color:var(--muted)"><input type="checkbox" data-meat="' + i + '" ' + (d.meat ? "checked" : "") + ' aria-label="Ingrediente di carne">carne</label>' +
+        (showBase ? '<label class="flex shrink-0 flex-col items-center text-xs" style="color:var(--muted)"><input type="checkbox" data-base="' + i + '" ' + (d.base ? "checked" : "") + ' aria-label="Ingrediente base">base</label>' : "") +
         '<input class="field min-w-0 flex-1" type="text" data-f="name" placeholder="Ingrediente" value="' + esc(d.name) + '" aria-label="Nome ingrediente ' + (i + 1) + '">' +
         '<input class="field num" style="width:6.5rem" type="text" inputmode="decimal" data-f="grams" placeholder="g" value="' + esc(d.grams) + '" aria-label="Grammi ingrediente ' + (i + 1) + '">' +
         '<button type="button" class="btn" style="min-width:48px;padding:0" data-del="' + i + '" aria-label="Rimuovi ingrediente ' + (i + 1) + '">✕</button>' +
@@ -544,17 +781,16 @@
     if (row && f) draft[+row.getAttribute("data-row")][f] = e.target.value;
   });
   $("mRows").addEventListener("change", function (e) {
-    var m = e.target.getAttribute("data-meat"); if (m !== null) draft[+m].meat = e.target.checked;
+    var m = e.target.getAttribute("data-base"); if (m !== null) draft[+m].base = e.target.checked;
   });
   $("mRows").addEventListener("click", function (e) {
     var b = e.target.closest("[data-del]"); if (!b) return;
     if (draft.length <= 1) return;
-    var idx = +b.getAttribute("data-del");
-    draft.splice(idx, 1);
+    draft.splice(+b.getAttribute("data-del"), 1);
     renderRows();
   });
   $("mAddRow").addEventListener("click", function () {
-    draft.push({ name: "", grams: "" }); renderRows();
+    draft.push({ name: "", grams: "", base: false, orig: -1 }); renderRows();
     var inputs = $("mRows").querySelectorAll('[data-f="name"]'); inputs[inputs.length - 1].focus();
   });
   document.querySelectorAll('input[name="mMode"]').forEach(function (r) { r.addEventListener("change", renderRows); });
@@ -568,46 +804,247 @@
     var name = $("mName").value.trim();
     if (!name) { showErr("Scrivi il nome della ricetta."); $("mName").focus(); return; }
     var mode = modalMode();
-    var ingredients = [];
+    var rows = [];
     for (var i = 0; i < draft.length; i++) {
       var n = draft[i].name.trim(); var gRaw = String(draft[i].grams).trim();
       if (!n && !gRaw) continue;
       var g = parseNum(gRaw);
       if (!n) { showErr("Manca il nome dell'ingrediente alla riga " + (i + 1) + "."); return; }
       if (!isFinite(g) || g <= 0) { showErr("Inserisci i grammi di «" + n + "» (numero maggiore di zero)."); return; }
-      ingredients.push({ name: n, grams: g, meat: !!draft[i].meat });
+      rows.push({ name: n, grams: g, base: mode !== "portions" && !!draft[i].base, orig: draft[i].orig });
     }
-    if (!ingredients.length) { showErr("Aggiungi almeno un ingrediente."); return; }
-    if (mode === "meat" && !ingredients.some(function (x) { return x.meat; })) { showErr("Spunta almeno un ingrediente di carne, oppure scegli «Peso totale»."); return; }
-    var dup = allRecipes().some(function (r) { return r.name.toLowerCase() === name.toLowerCase() && r.id !== editingId; });
+    if (!rows.length) { showErr("Aggiungi almeno un ingrediente."); return; }
+    var anyBase = rows.some(function (x) { return x.base; });
+    if (mode === "base" && !anyBase) {
+      showErr("Spunta almeno un ingrediente «base», oppure scegli un altro tipo di calcolo."); return;
+    }
+    var dup = recipes.some(function (r) { return r.name.toLowerCase() === name.toLowerCase() && r.id !== editingId; });
     if (dup) { showErr("Esiste già una ricetta con questo nome."); return; }
-    // se il riferimento non era tra le righe valide, usa la prima
-    var recipe = { id: editingId || "c-" + Date.now().toString(36), name: name, mode: mode, ingredients: ingredients };
 
-    if (editingId) custom = custom.map(function (r) { return r.id === editingId ? recipe : r; });
-    else custom.push(recipe);
-    saveCustom();
-    state.id = recipe.id; state.basis = recipeDefault(recipe); savePrefs();
-    closeModal(); renderSelect(); render();
-    toast("Ricetta salvata");
+    var recipe = {
+      id: editingId || "c-" + Date.now().toString(36),
+      name: name, mode: mode,
+      pos: editingOld && typeof editingOld.pos === "number" ? editingOld.pos : nextPos(),
+      ingredients: rows.map(function (x) { var o = { name: x.name, grams: x.grams }; if (x.base) o.base = true; return o; })
+    };
+    if (anyBase) recipe.baseLabel = $("mBaseLabel").value.trim() || "carne";
+
+    if (editingId) {
+      var changes = diffRecipe(editingOld, recipe, rows);
+      if (!changes.length) { closeModal(); toast("Nessuna modifica"); return; }
+      var wasPortions = isPortions(editingOld);
+      recipes = recipes.map(function (r) { return r.id === editingId ? recipe : r; });
+      saveRecipes(); rSet(recipe);
+      addLog("edit", recipe.name, changes);
+      closeModal(); selectRecipe(recipe.id, wasPortions); renderSelect(); render();
+      toast("Ricetta modificata");
+    } else {
+      recipes.push(recipe);
+      saveRecipes(); rSet(recipe);
+      addLog("create", recipe.name, [
+        "Calcolo: " + MODE_LABEL[mode],
+        "Ingredienti: " + recipe.ingredients.map(describeIngredient).join(", ")
+      ]);
+      closeModal(); selectRecipe(recipe.id); renderSelect(); render();
+      toast("Ricetta salvata");
+    }
   });
 
   $("addBtn").addEventListener("click", function () { openModal(null); });
-  $("editBtn").addEventListener("click", function () { var r = current(); if (!r.builtin) openModal(r); });
+  $("editBtn").addEventListener("click", function () { openModal(current()); });
   $("delBtn").addEventListener("click", function () {
-    var r = current(); if (r.builtin) return;
+    var r = current();
+    if (recipes.length <= 1) { toast("Deve restare almeno una ricetta"); return; }
     if (!window.confirm("Eliminare «" + r.name + "»?")) return;
-    custom = custom.filter(function (x) { return x.id !== r.id; });
-    saveCustom(); state.id = DEFAULTS[0].id; savePrefs(); renderSelect(); render(); toast("Ricetta eliminata");
+    var wasPortions = isPortions(r);
+    recipes = recipes.filter(function (x) { return x.id !== r.id; });
+    saveRecipes(); rRemove(r.id);
+    addLog("delete", r.name, [
+      "Ricetta eliminata",
+      "Ingredienti: " + r.ingredients.map(describeIngredient).join(", ")
+    ]);
+    selectRecipe(recipes[0].id, wasPortions); renderSelect(); render();
+    toast("Ricetta eliminata");
+  });
+  $("resetBtn").addEventListener("click", function () {
+    var msg = "Ripristinare le ricette iniziali? Le ricette attuali (anche quelle create o modificate) saranno sostituite" +
+      (sync.on ? " su tutti i dispositivi collegati" : "") + ". Il registro resta.";
+    if (!window.confirm(msg)) return;
+    var wasPortions = isPortions(current());
+    recipes = clone(SEED);
+    saveRecipes(); rSetAll(recipes);
+    addLog("reset", "Tutte le ricette", ["Ripristinate le " + recipes.length + " ricette iniziali"]);
+    selectRecipe(recipes[0].id, wasPortions); renderSelect(); render();
+    toast("Ricette iniziali ripristinate");
+  });
+
+  // ---------- Sincronizzazione: collegamento ----------
+  function renderSync() {
+    var avail = syncAvailable();
+    var st = $("syncStatus"), note = $("syncNote");
+    $("syncForm").classList.toggle("hidden", !avail || sync.on);
+    $("syncOn").classList.toggle("hidden", !sync.on);
+    if (!avail) {
+      st.textContent = "Non configurata";
+      note.textContent = "Le chiavi Firebase non sono ancora nel file: ricette e registro restano su questo dispositivo.";
+      return;
+    }
+    if (!sync.on) {
+      st.textContent = "Non attiva";
+      note.textContent = "Inserisci o genera un codice e usa lo stesso codice sugli altri dispositivi.";
+      return;
+    }
+    st.textContent = sync.error ? "Errore" : (sync.online ? "Collegato" : "Offline");
+    note.textContent = sync.error
+      ? "Controlla il codice e le regole del database."
+      : "Ricette e registro sono condivisi con chi usa lo stesso codice.";
+    $("syncCodeShow").textContent = sync.code;
+  }
+
+  function onRemoteRecipes(snap) {
+    sync.error = false;
+    var val = snap.val();
+    var list = [];
+    if (val && typeof val === "object") {
+      list = Object.keys(val).map(function (k) {
+        var r = val[k];
+        if (!r || typeof r !== "object") return null;
+        r = clone(r); if (!r.id) r.id = k;
+        return migrate(r);
+      }).filter(validRecipe);
+      ensurePos(list);
+    }
+    if (!list.length) {
+      // Spazio nuovo: carica le ricette di questo dispositivo
+      if (sync.firstRecipes) { sync.firstRecipes = false; rSetAll(recipes); }
+      renderSync();
+      return;
+    }
+    sync.firstRecipes = false;
+    recipes = list;
+    saveRecipes();
+    renderSelect(); render(); renderSync();
+  }
+
+  function onRemoteLog(snap) {
+    sync.error = false;
+    var val = snap.val();
+    var list = [];
+    if (val && typeof val === "object") {
+      list = Object.keys(val).map(function (k) {
+        var l = val[k];
+        if (!l || typeof l !== "object") return null;
+        l = clone(l); l.d = toArr(l.d); if (typeof l.n !== "string") l.n = "";
+        return l;
+      }).filter(validLog);
+      list.sort(function (a, b) { return a.t < b.t ? -1 : (a.t > b.t ? 1 : 0); });
+    }
+    if (sync.firstLog) {
+      sync.firstLog = false;
+      if (!list.length) {
+        // Spazio nuovo: carica anche il registro locale
+        logs.forEach(function (l) { try { sync.ref.child("log").push(clone(l)).catch(onSyncError); } catch (e) { onSyncError(e); } });
+      } else {
+        logs = list; renderLog();
+      }
+      addLog("sync", "", ["Dispositivo collegato alla sincronizzazione"]);
+      renderSync();
+      return;
+    }
+    logs = list;
+    writeJSON(KEYS.log, logs);
+    renderLog(); renderSync();
+  }
+
+  function connect(code) {
+    if (!syncAvailable()) { renderSync(); return; }
+    disconnect(true);
+    try {
+      if (!firebase.apps.length) firebase.initializeApp(FIREBASE_CONFIG);
+      var database = firebase.database();
+      sync.ref = database.ref("spazi/" + code);
+      sync.infoRef = database.ref(".info/connected");
+    } catch (e) { onSyncError(e); return; }
+    sync.on = true; sync.code = code; sync.error = false;
+    sync.firstRecipes = true; sync.firstLog = true;
+    writeJSON(KEYS.sync, { code: code });
+    sync.infoRef.on("value", function (s) { sync.online = !!s.val(); renderSync(); });
+    sync.ref.child("recipes").on("value", onRemoteRecipes, onSyncError);
+    sync.ref.child("log").on("value", onRemoteLog, onSyncError);
+    renderSync();
+  }
+
+  function disconnect(silent) {
+    try {
+      if (sync.ref) { sync.ref.child("recipes").off(); sync.ref.child("log").off(); }
+      if (sync.infoRef) sync.infoRef.off();
+    } catch (e) { /* niente */ }
+    sync.on = false; sync.ref = null; sync.infoRef = null; sync.online = false; sync.error = false;
+    if (!silent) {
+      try { localStorage.removeItem(KEYS.sync); } catch (e) {}
+      renderSync();
+    }
+  }
+
+  function validCode(c) { return /^[A-Za-z0-9_-]{8,64}$/.test(c); }
+  function genCode() {
+    var chars = "abcdefghijkmnpqrstuvwxyz23456789";
+    var out = "";
+    var arr = new Uint32Array(12);
+    (window.crypto || window.msCrypto).getRandomValues(arr);
+    for (var i = 0; i < arr.length; i++) out += chars.charAt(arr[i] % chars.length);
+    return out.slice(0, 4) + "-" + out.slice(4, 8) + "-" + out.slice(8, 12);
+  }
+  $("syncGen").addEventListener("click", function () { $("syncCode").value = genCode(); $("syncErr").classList.add("hidden"); });
+  $("syncConnect").addEventListener("click", function () {
+    var c = $("syncCode").value.trim();
+    var err = $("syncErr");
+    if (!validCode(c)) {
+      err.textContent = "Il codice deve avere da 8 a 64 caratteri: lettere, numeri, trattino o underscore.";
+      err.classList.remove("hidden"); return;
+    }
+    err.classList.add("hidden");
+    connect(c);
+    toast("Collegamento in corso…");
+  });
+  $("syncCopy").addEventListener("click", function () { copyText(sync.code, "Codice copiato"); });
+  $("syncOff").addEventListener("click", function () {
+    if (!window.confirm("Scollegare questo dispositivo? Le ricette restano salvate qui, ma non si aggiornano più con gli altri dispositivi.")) return;
+    disconnect(false);
+    toast("Dispositivo scollegato");
   });
 
   // ---------- Avvio ----------
-  loadCustom();
-  loadPrefs();
-  if (!allRecipes().some(function (r) { return r.id === state.id; })) state.id = DEFAULTS[0].id;
-  $("qty").value = state.qty;
-  renderSelect();
-  render();
+  (function init() {
+    var stored = readJSON(KEYS.recipes);
+    var list = Array.isArray(stored) ? stored.map(migrate).filter(validRecipe) : [];
+    if (list.length) recipes = ensurePos(list);
+    else { recipes = clone(SEED); saveRecipes(); }
+
+    var storedLog = readJSON(KEYS.log);
+    if (Array.isArray(storedLog)) logs = storedLog.filter(validLog);
+
+    var p = readJSON(KEYS.prefs);
+    if (p && typeof p === "object") {
+      if (typeof p.id === "string") state.id = p.id;
+      if (typeof p.qty === "string") state.qty = p.qty;
+      if (p.unit === "g" || p.unit === "kg") state.unit = p.unit;
+      if (p.basis === "base" || p.basis === "meat") state.basis = "base";
+      else if (p.basis === "total") state.basis = "total";
+    }
+    var r = current();
+    if (isPortions(r) && !isFinite(parseNum(state.qty))) state.qty = "1";
+    $("qty").value = state.qty;
+
+    if (!logs.length) addLog("init", "", ["Registro avviato con " + recipes.length + " ricette."]);
+    else renderLog();
+    renderSelect();
+    render();
+    renderSync();
+
+    var saved = readJSON(KEYS.sync);
+    if (saved && typeof saved.code === "string" && validCode(saved.code) && syncAvailable()) connect(saved.code);
+  })();
 })();
 </script>
 </body>
